@@ -28,6 +28,7 @@ NATURAL_SEMITONES = {
     "B": 11,
 }
 
+NATURAL_LETTERS = ("C", "D", "E", "F", "G", "A", "B")
 SHARP_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 FLAT_NAMES = ("C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B")
 
@@ -41,6 +42,7 @@ class Pitch:
     octave: int
     midi_number: int
     frequency: float
+    root_letter: str = ""
     prefer_flats: bool = False
 
     @property
@@ -63,6 +65,7 @@ class ScalePreset:
     description: str
     intervals: tuple[int, ...]
     ratios: tuple[Fraction, ...]
+    letter_steps: Optional[tuple[int, ...]] = None
 
 
 SCALE_PRESETS = {
@@ -98,6 +101,7 @@ SCALE_PRESETS = {
             Fraction(5, 3),
             Fraction(15, 8),
         ),
+        letter_steps=tuple(range(7)),
     ),
     "minor": ScalePreset(
         name="minor",
@@ -112,6 +116,7 @@ SCALE_PRESETS = {
             Fraction(8, 5),
             Fraction(9, 5),
         ),
+        letter_steps=tuple(range(7)),
     ),
     "pythagorean": ScalePreset(
         name="pythagorean",
@@ -142,8 +147,8 @@ def pitch_class_name(semitone: int, prefer_flats: bool = False) -> str:
 
 def parse_pitch(name: str, default_octave: int = DEFAULT_OCTAVE, a4: float = DEFAULT_A4_HZ) -> Pitch:
     """Parse a pitch like C4, Db3, F♯4, or A into an equal-tempered root."""
-    if a4 <= 0:
-        raise ValueError("a4 must be > 0")
+    if not math.isfinite(a4) or a4 <= 0:
+        raise ValueError("a4 must be finite and > 0")
     if not name or not name.strip():
         raise ValueError("Root note is required.")
 
@@ -169,6 +174,7 @@ def parse_pitch(name: str, default_octave: int = DEFAULT_OCTAVE, a4: float = DEF
         octave=effective_octave,
         midi_number=midi_number,
         frequency=frequency,
+        root_letter=letter,
         prefer_flats=prefer_flats,
     )
 
@@ -189,13 +195,35 @@ def ratio_cents(ratio: Fraction) -> float:
     return 1200.0 * math.log2(float(ratio))
 
 
+def spell_diatonic_note(root: Pitch, interval: int, letter_step: int) -> str:
+    root_letter = root.root_letter or root.pitch_class[0]
+    root_index = NATURAL_LETTERS.index(root_letter)
+    letter = NATURAL_LETTERS[(root_index + letter_step) % len(NATURAL_LETTERS)]
+    target_semitone = (root.semitone + interval) % 12
+    accidental_offset = (target_semitone - NATURAL_SEMITONES[letter]) % 12
+    if accidental_offset > 6:
+        accidental_offset -= 12
+
+    if accidental_offset > 0:
+        return f"{letter}{'#' * accidental_offset}"
+    if accidental_offset < 0:
+        return f"{letter}{'b' * abs(accidental_offset)}"
+    return letter
+
+
+def note_name_for_interval(root: Pitch, preset: ScalePreset, index: int, interval: int) -> str:
+    if preset.letter_steps is not None:
+        return spell_diatonic_note(root, interval, preset.letter_steps[index])
+    return pitch_class_name(root.semitone + interval, root.prefer_flats)
+
+
 def build_scale_notes(root: Pitch, preset: ScalePreset) -> list[NoteData]:
     notes = []
-    for interval, ratio in zip(preset.intervals, preset.ratios):
+    for index, (interval, ratio) in enumerate(zip(preset.intervals, preset.ratios)):
         cents = ratio_cents(ratio)
         notes.append(
             NoteData(
-                note_name=pitch_class_name(root.semitone + interval, root.prefer_flats),
+                note_name=note_name_for_interval(root, preset, index, interval),
                 ratio=ratio_text(ratio),
                 octave_shift=0,
                 cents=round(cents, 5),
@@ -352,7 +380,7 @@ def format_json(
         "range": range_mode,
         "notes": note_dicts(notes),
     }
-    return json.dumps(payload, indent=2)
+    return json.dumps(payload, indent=2, allow_nan=False)
 
 
 def format_scl(preset: ScalePreset) -> str:

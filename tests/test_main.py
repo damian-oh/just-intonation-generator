@@ -1,6 +1,6 @@
 import json
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 import sys
@@ -40,6 +40,13 @@ class PitchParsingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             main.parse_pitch("H4")
 
+    def test_parse_pitch_rejects_non_finite_a4(self):
+        with self.assertRaises(ValueError):
+            main.parse_pitch("A4", a4=float("nan"))
+
+        with self.assertRaises(ValueError):
+            main.parse_pitch("A4", a4=float("inf"))
+
 
 class ScaleGenerationTests(unittest.TestCase):
     def test_presets_have_expected_sizes(self):
@@ -56,6 +63,16 @@ class ScaleGenerationTests(unittest.TestCase):
         self.assertEqual(notes[2].octave_shift, 0)
         self.assertAlmostEqual(notes[2].cents, 386.31371, places=5)
         self.assertAlmostEqual(notes[2].frequency, 327.031956, places=5)
+
+    def test_minor_scale_uses_diatonic_flat_spellings(self):
+        notes = main.just_intonation_scale("C4", preset="minor")
+
+        self.assertEqual([note.note_name for note in notes], ["C", "D", "Eb", "F", "G", "Ab", "Bb"])
+
+    def test_major_scale_uses_diatonic_flat_spellings(self):
+        notes = main.just_intonation_scale("F4", preset="major")
+
+        self.assertEqual([note.note_name for note in notes], ["F", "G", "A", "Bb", "C", "D", "E"])
 
     def test_audible_octaves_are_sorted_and_within_range(self):
         notes = main.just_intonation_scale("C4", preset="major")
@@ -104,6 +121,17 @@ class CliTests(unittest.TestCase):
             exit_code = main.main(["--root", "A4", "--a4", "0"])
 
         self.assertEqual(exit_code, 2)
+
+    def test_cli_rejects_nan_a4_without_json_output(self):
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = main.main(["--root", "A4", "--a4", "nan", "--format", "json"])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("a4 must be finite and > 0", stderr.getvalue())
 
 
 if __name__ == "__main__":

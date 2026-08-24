@@ -69,6 +69,8 @@ class ScalePreset:
 
 
 SCALE_PRESETS = {
+    # Ratios are kept as exact Fractions so exported values remain precise;
+    # intervals are their corresponding equal-tempered semitone positions.
     "chromatic": ScalePreset(
         name="chromatic",
         description="5-limit just chromatic scale",
@@ -162,10 +164,15 @@ def parse_pitch(name: str, default_octave: int = DEFAULT_OCTAVE, a4: float = DEF
     accidental_offset = {"": 0, "#": 1, "b": -1}[accidental]
     octave = int(octave_text) if octave_text is not None else default_octave
 
+    # MIDI assigns C-1 to 0, so its octave numbering is one below the
+    # conventional octave number used in a note name.
     midi_number = (octave + 1) * 12 + NATURAL_SEMITONES[letter] + accidental_offset
     semitone = midi_number % 12
     effective_octave = midi_number // 12 - 1
     prefer_flats = accidental == "b"
+
+    # The root is located with equal temperament; just-intonation ratios are
+    # applied later relative to this reference frequency.
     frequency = a4 * (2 ** ((midi_number - 69) / 12))
 
     return Pitch(
@@ -192,14 +199,19 @@ def ratio_text(ratio: Fraction) -> str:
 
 
 def ratio_cents(ratio: Fraction) -> float:
+    # One octave is 1200 cents, and frequency ratios combine logarithmically.
     return 1200.0 * math.log2(float(ratio))
 
 
 def spell_diatonic_note(root: Pitch, interval: int, letter_step: int) -> str:
+    """Spell an interval with the expected letter name and nearest accidental."""
     root_letter = root.root_letter or root.pitch_class[0]
     root_index = NATURAL_LETTERS.index(root_letter)
     letter = NATURAL_LETTERS[(root_index + letter_step) % len(NATURAL_LETTERS)]
     target_semitone = (root.semitone + interval) % 12
+
+    # First choose the diatonic letter, then express the remaining pitch-class
+    # difference as the smallest signed number of sharps or flats.
     accidental_offset = (target_semitone - NATURAL_SEMITONES[letter]) % 12
     if accidental_offset > 6:
         accidental_offset -= 12
@@ -225,6 +237,8 @@ def build_scale_notes(root: Pitch, preset: ScalePreset) -> list[NoteData]:
             NoteData(
                 note_name=note_name_for_interval(root, preset, index, interval),
                 ratio=ratio_text(ratio),
+                # Preset ratios are normalized to one octave; octave expansion
+                # adds the actual shifts later in audible_octaves().
                 octave_shift=0,
                 cents=round(cents, 5),
                 frequency=root.frequency * float(ratio),
@@ -255,6 +269,8 @@ def audible_octaves(
     if freq_min <= 0 or freq_max <= 0 or freq_min >= freq_max:
         raise ValueError("freq_min and freq_max must be positive and increasing")
 
+    # A logarithmic frequency distance makes octave-equivalent pitches easy to
+    # compare. Rounding these values groups pitches within cent_deviation.
     cents_factor = 1200.0 / cent_deviation
     seen = set()
     results = []
@@ -263,6 +279,8 @@ def audible_octaves(
         if note.frequency <= 0:
             continue
 
+        # Solve freq_min <= note.frequency * 2**k <= freq_max so only octave
+        # shifts that can land inside the requested frequency range are tried.
         k_min = math.ceil(math.log2(freq_min / note.frequency))
         k_max = math.floor(math.log2(freq_max / note.frequency))
 
@@ -384,6 +402,7 @@ def format_json(
 
 
 def format_scl(preset: ScalePreset) -> str:
+    """Format a one-octave preset using Scala's implicit-root convention."""
     lines = [
         "! just-intonation-generator.scl",
         "!",
@@ -391,6 +410,8 @@ def format_scl(preset: ScalePreset) -> str:
         str(len(preset.ratios)),
         "!",
     ]
+    # Scala omits the 1/1 tonic from the pitch list, so append the octave that
+    # closes the tuning explicitly as the final entry.
     lines.extend(ratio_text(ratio) for ratio in preset.ratios[1:])
     lines.append("2/1")
     return "\n".join(lines)
@@ -463,6 +484,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         root = parse_pitch(root_note, a4=args.a4)
         preset = get_preset(args.preset)
+        # A Scala file describes one tuning octave; audible-range expansion is
+        # meaningful for note listings but not for this export format.
         range_mode = "octave" if args.output_format == "scl" else args.range_mode
         base_notes = build_scale_notes(root, preset)
         notes = audible_octaves(base_notes) if range_mode == "audible" else base_notes
